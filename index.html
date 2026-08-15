@@ -1,0 +1,694 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>Horizon — balance the moons</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#060812">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Horizon">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<link rel="icon" href="icons/icon-192.png">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; user-select: none; }
+  html, body {
+    width: 100%; height: 100%;
+    background: #060812;
+    overflow: hidden;
+    touch-action: none;
+    font-family: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  }
+  #wrap { position: relative; width: 100vw; height: 100vh; height: 100dvh; }
+  canvas { display: block; width: 100%; height: 100%; }
+
+  .hud {
+    position: absolute; top: 0; left: 0; right: 0;
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    align-items: flex-start;
+    gap: 14px;
+    padding: max(16px, env(safe-area-inset-top)) 20px 0 20px;
+    color: #cfe9ff;
+    z-index: 5;
+  }
+  .hud .score-col { pointer-events: none; }
+  .hud .col-right { text-align: right; pointer-events: none; }
+  .hud .label { font-size: 10px; letter-spacing: 0.15em; color: #5b7a9c; text-transform: uppercase; }
+  .hud .value { font-size: 22px; font-weight: 600; color: #eaf6ff; margin-top: 2px; }
+
+  .sound-btn {
+    pointer-events: auto;
+    width: 34px; height: 34px;
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    color: #cfe9ff;
+    background: rgba(20, 30, 50, 0.55);
+    border: 1px solid rgba(120, 150, 190, 0.35);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+  }
+  .sound-btn:active { background: rgba(40, 55, 85, 0.7); }
+
+  .controls {
+    position: absolute; bottom: 0; left: 0; right: 0;
+    display: flex; justify-content: center; gap: 12px;
+    padding: 0 20px max(18px, env(safe-area-inset-bottom)) 20px;
+    z-index: 5;
+  }
+  .controls.hide { display: none; }
+  .ui-btn {
+    pointer-events: auto;
+    font-family: inherit;
+    font-size: 12px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: #cfe9ff;
+    background: rgba(20, 30, 50, 0.55);
+    border: 1px solid rgba(120, 150, 190, 0.35);
+    border-radius: 999px;
+    padding: 11px 20px;
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+  }
+  .ui-btn:active { background: rgba(40, 55, 85, 0.7); }
+  .ui-btn.danger { color: #ffb0a8; border-color: rgba(255, 120, 100, 0.4); }
+
+  .overlay {
+    position: absolute; inset: 0;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    text-align: center; padding: 32px;
+    color: #eaf6ff;
+    background: radial-gradient(ellipse at 50% 40%, rgba(20,30,55,0.55), rgba(6,8,18,0.86));
+    transition: opacity 0.35s ease;
+    z-index: 10;
+  }
+  .overlay.hidden { opacity: 0; pointer-events: none; }
+  .overlay h1 {
+    font-size: 22px; font-weight: 600; letter-spacing: 0.02em; margin-bottom: 10px;
+  }
+  .overlay p {
+    font-size: 13px; color: #7d9dbe; line-height: 1.6; max-width: 260px; margin-bottom: 4px;
+  }
+  .overlay .big-score {
+    font-size: 44px; font-weight: 700; color: #8ecbff; margin: 10px 0 2px 0;
+  }
+  .overlay .big-score.record { color: #ffe27a; }
+  .overlay .best {
+    font-size: 12px; color: #5b7a9c; margin-bottom: 14px;
+  }
+  .overlay .record-badge {
+    font-size: 13px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase;
+    color: #ffe27a; margin-bottom: 18px;
+    opacity: 0; transform: translateY(6px);
+  }
+  .overlay .record-badge.show {
+    animation: recordIn 0.5s ease forwards;
+  }
+  @keyframes recordIn {
+    0% { opacity: 0; transform: translateY(6px) scale(0.9); }
+    60% { opacity: 1; transform: translateY(-2px) scale(1.08); }
+    100% { opacity: 1; transform: translateY(0) scale(1); }
+  }
+  .overlay .hint {
+    margin-top: 12px; font-size: 11px; color: #43587a; letter-spacing: 0.08em; text-transform: uppercase;
+  }
+  .overlay .resume-row {
+    display: flex; gap: 12px; margin-top: 20px;
+  }
+  .pulse { animation: pulse 1.6s ease-in-out infinite; }
+  @keyframes pulse { 0%,100% { opacity: 0.55; } 50% { opacity: 1; } }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="c"></canvas>
+
+  <div class="hud">
+    <button class="sound-btn ui-btn" id="soundBtn" aria-label="Toggle sound"></button>
+    <div class="score-col">
+      <div class="label">Score</div>
+      <div class="value" id="timeVal">0.0s</div>
+    </div>
+    <div class="col-right">
+      <div class="label">High score</div>
+      <div class="value" id="bestVal">0.0s</div>
+    </div>
+  </div>
+
+  <div class="controls" id="playControls">
+    <button class="ui-btn" id="pauseBtn">Pause</button>
+    <button class="ui-btn danger" id="endBtn">End game</button>
+  </div>
+
+  <div class="overlay" id="startOverlay">
+    <h1>Balance the moons on the horizon</h1>
+    <p>Press and drag your thumb left or right to tilt the line. Move right to lift the right side, left to lift the left side. A second moon joins after a while — don't let either roll off the ends.</p>
+    <div class="hint pulse">Touch anywhere to begin</div>
+  </div>
+
+  <div class="overlay hidden" id="pauseOverlay">
+    <h1>Paused</h1>
+    <div class="resume-row">
+      <button class="ui-btn" id="resumeBtn">Resume</button>
+      <button class="ui-btn danger" id="quitBtn">End game</button>
+    </div>
+  </div>
+
+  <div class="overlay hidden" id="endOverlay">
+    <div class="label">You lasted</div>
+    <div class="big-score" id="finalScore">0.0s</div>
+    <div class="record-badge" id="recordBadge">New high score!</div>
+    <div class="best" id="finalBest">Best: 0.0s</div>
+    <div class="hint pulse">Tap to try again</div>
+  </div>
+</div>
+
+<script>
+(function () {
+  const canvas = document.getElementById('c');
+  const ctx = canvas.getContext('2d');
+  const startOverlay = document.getElementById('startOverlay');
+  const endOverlay = document.getElementById('endOverlay');
+  const pauseOverlay = document.getElementById('pauseOverlay');
+  const playControls = document.getElementById('playControls');
+  const timeVal = document.getElementById('timeVal');
+  const bestVal = document.getElementById('bestVal');
+  const finalScore = document.getElementById('finalScore');
+  const finalBest = document.getElementById('finalBest');
+  const recordBadge = document.getElementById('recordBadge');
+  const pauseBtn = document.getElementById('pauseBtn');
+  const endBtn = document.getElementById('endBtn');
+  const resumeBtn = document.getElementById('resumeBtn');
+  const quitBtn = document.getElementById('quitBtn');
+  const soundBtn = document.getElementById('soundBtn');
+
+  let W = 0, H = 0, DPR = 1;
+  function resize() {
+    DPR = Math.min(window.devicePixelRatio || 1, 2.5);
+    W = window.innerWidth;
+    H = window.innerHeight;
+    canvas.width = Math.floor(W * DPR);
+    canvas.height = Math.floor(H * DPR);
+    canvas.style.width = W + 'px';
+    canvas.style.height = H + 'px';
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  const MAX_ANGLE = 0.46;
+  const GRAVITY = 900;
+  const INPUT_SMOOTH = 10;
+  const DAMPING = 0.15;
+  const BALL_RADIUS = 17;
+  const DROP_GRAVITY = 1500;
+  const SECOND_MOON_DELAY = 9;
+  const FALL_DURATION = 0.9;
+  const WEIGHT_TILT = 0.4;
+
+  const MOON_THEMES = [
+    { hi: '#eaf6ff', mid: '#6ec3ff', dark: '#1b4f8c', glow: 'rgba(110,195,255,0.55)', crater: '#12335c' },
+    { hi: '#ecebff', mid: '#8b9cff', dark: '#2c2c8c', glow: 'rgba(140,150,255,0.55)', crater: '#1c1c5c' }
+  ];
+
+  let audioCtx = null;
+  let masterGain = null;
+  let muted = loadMuted();
+  let lastDangerBeep = -999;
+
+  const ICON_ON = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H2v6h4l5 4V5z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M18.5 5.5a9 9 0 0 1 0 13"/></svg>';
+  const ICON_OFF = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H2v6h4l5 4V5z"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>';
+  soundBtn.innerHTML = muted ? ICON_OFF : ICON_ON;
+
+  function loadMuted() {
+    try { return localStorage.getItem('horizonBalanceMuted') === '1'; } catch (e) { return false; }
+  }
+  function saveMuted(v) {
+    try { localStorage.setItem('horizonBalanceMuted', v ? '1' : '0'); } catch (e) {}
+  }
+
+  function ensureAudio() {
+    if (audioCtx) {
+      if (audioCtx.state === 'suspended') audioCtx.resume();
+      return;
+    }
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return;
+    audioCtx = new AC();
+    masterGain = audioCtx.createGain();
+    masterGain.gain.value = muted ? 0 : 1;
+    masterGain.connect(audioCtx.destination);
+  }
+
+  function tone(freq, dur, type, vol, delay, glideTo) {
+    if (!audioCtx || muted) return;
+    const t0 = audioCtx.currentTime + (delay || 0);
+    const osc = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    osc.type = type || 'sine';
+    osc.frequency.setValueAtTime(freq, t0);
+    if (glideTo) osc.frequency.linearRampToValueAtTime(glideTo, t0 + dur);
+    g.gain.setValueAtTime(0, t0);
+    g.gain.linearRampToValueAtTime(vol || 0.2, t0 + 0.015);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    osc.connect(g); g.connect(masterGain);
+    osc.start(t0); osc.stop(t0 + dur + 0.03);
+  }
+
+  function playThud() { tone(160, 0.18, 'sine', 0.35, 0, 90); }
+  function playClick() { tone(700, 0.05, 'square', 0.1); }
+  function playDanger() { tone(900, 0.08, 'square', 0.13); }
+  function playSpawn() { tone(440, 0.14, 'sine', 0.16, 0, 700); }
+  function playEndTone() { tone(320, 0.22, 'sine', 0.2, 0, 140); }
+  function playChime() {
+    [523.25, 659.25, 783.99, 1046.5].forEach(function (f, i) { tone(f, 0.25, 'triangle', 0.18, i * 0.09); });
+  }
+  function playWhoosh() {
+    if (!audioCtx || muted) return;
+    const t0 = audioCtx.currentTime;
+    const osc = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    osc.type = 'sawtooth';
+    osc.frequency.setValueAtTime(500, t0);
+    osc.frequency.exponentialRampToValueAtTime(60, t0 + 0.5);
+    g.gain.setValueAtTime(0, t0);
+    g.gain.linearRampToValueAtTime(0.16, t0 + 0.03);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.5);
+    osc.connect(g); g.connect(masterGain);
+    osc.start(t0); osc.stop(t0 + 0.55);
+  }
+
+  soundBtn.addEventListener('click', function (e) {
+    e.stopPropagation();
+    ensureAudio();
+    muted = !muted;
+    saveMuted(muted);
+    if (masterGain) masterGain.gain.value = muted ? 0 : 1;
+    soundBtn.innerHTML = muted ? ICON_OFF : ICON_ON;
+  });
+
+  let pivotX, pivotY, beamHalfLen;
+  function layout() {
+    pivotX = W / 2;
+    pivotY = H * 0.52;
+    beamHalfLen = Math.min(W * 0.38, 320);
+  }
+  layout();
+  window.addEventListener('resize', layout);
+
+  let HIGH_SCORE_KEY = 'horizonBalanceHighScore';
+  function loadBest() {
+    try {
+      const raw = localStorage.getItem(HIGH_SCORE_KEY);
+      return raw ? parseFloat(raw) : 0;
+    } catch (e) { return 0; }
+  }
+  function saveBest(val) {
+    try { localStorage.setItem(HIGH_SCORE_KEY, String(val)); } catch (e) {}
+  }
+
+  let state = 'ready';
+  let tiltInput = 0;
+  let tiltCurrent = 0;
+  let angle = 0;
+  let elapsed = 0;
+  let best = loadBest();
+  let pointerActive = false;
+  let shakeT = 0;
+  let stars = [];
+  let pausedElapsed = 0;
+  let secondMoonSpawned = false;
+  let ending = false;
+  let balls = [];
+
+  bestVal.textContent = best.toFixed(1) + 's';
+
+  function initStars() {
+    stars = [];
+    const n = Math.floor((W * H) / 9000);
+    for (let i = 0; i < n; i++) {
+      stars.push({
+        x: Math.random() * W,
+        y: Math.random() * H,
+        r: Math.random() * 1.3 + 0.3,
+        a: Math.random() * 0.6 + 0.2,
+        tw: Math.random() * Math.PI * 2
+      });
+    }
+  }
+  initStars();
+  window.addEventListener('resize', initStars);
+
+  function makeDroppingBall(themeIndex) {
+    const margin = BALL_RADIUS * 1.5;
+    const dropTargetS = (Math.random() * 2 - 1) * (beamHalfLen - margin);
+    return {
+      phase: 'dropping',
+      theme: themeIndex,
+      s: dropTargetS,
+      v: 0,
+      dropY: -60,
+      dropVY: 0,
+      dropTargetS: dropTargetS,
+      dropTargetY: pivotY - BALL_RADIUS
+    };
+  }
+
+  function beginDrop() {
+    state = 'playing';
+    startOverlay.classList.add('hidden');
+    endOverlay.classList.add('hidden');
+    pauseOverlay.classList.add('hidden');
+    playControls.classList.remove('hide');
+
+    tiltInput = 0;
+    tiltCurrent = 0;
+    angle = 0;
+    elapsed = 0;
+    secondMoonSpawned = false;
+    ending = false;
+    balls = [makeDroppingBall(0)];
+  }
+
+  function endGame() {
+    state = 'gameover';
+    const isRecord = elapsed > best;
+    playEndTone();
+    if (isRecord) {
+      best = elapsed;
+      saveBest(best);
+      setTimeout(playChime, 180);
+    }
+    finalScore.textContent = elapsed.toFixed(1) + 's';
+    finalScore.classList.toggle('record', isRecord);
+    finalBest.textContent = 'Best: ' + best.toFixed(1) + 's';
+    bestVal.textContent = best.toFixed(1) + 's';
+    recordBadge.classList.toggle('show', isRecord);
+    playControls.classList.add('hide');
+    pauseOverlay.classList.add('hidden');
+    endOverlay.classList.remove('hidden');
+    shakeT = 0.4;
+  }
+
+  function togglePause() {
+    if (state === 'playing') {
+      state = 'paused';
+      pausedElapsed = elapsed;
+      pauseOverlay.classList.remove('hidden');
+    } else if (state === 'paused') {
+      state = 'playing';
+      pauseOverlay.classList.add('hidden');
+    }
+  }
+
+  pauseBtn.addEventListener('click', function (e) { e.stopPropagation(); playClick(); togglePause(); });
+  resumeBtn.addEventListener('click', function (e) { e.stopPropagation(); playClick(); togglePause(); });
+  endBtn.addEventListener('click', function (e) { e.stopPropagation(); playClick(); if (state === 'playing') endGame(); });
+  quitBtn.addEventListener('click', function (e) { e.stopPropagation(); playClick(); if (state === 'paused' || state === 'playing') endGame(); });
+
+  function pointerToTilt(x) {
+    const norm = (x - pivotX) / (W / 2);
+    return Math.max(-1, Math.min(1, norm));
+  }
+
+  function isUiTarget(target) {
+    return target && target.closest && target.closest('.ui-btn');
+  }
+
+  function onDown(e) {
+    if (isUiTarget(e.target)) return;
+    ensureAudio();
+    const x = e.touches ? e.touches[0].clientX : e.clientX;
+    if (state === 'ready' || state === 'gameover') {
+      beginDrop();
+      return;
+    }
+    if (state === 'playing') {
+      pointerActive = true;
+      tiltInput = pointerToTilt(x);
+    }
+  }
+  function onMove(e) {
+    if (!pointerActive || state !== 'playing') return;
+    const x = e.touches ? e.touches[0].clientX : e.clientX;
+    tiltInput = pointerToTilt(x);
+  }
+  function onUp() {
+    pointerActive = false;
+    tiltInput = 0;
+  }
+
+  window.addEventListener('touchstart', function (e) { if (!isUiTarget(e.target)) e.preventDefault(); onDown(e); }, { passive: false });
+  window.addEventListener('touchmove', function (e) { if (pointerActive) e.preventDefault(); onMove(e); }, { passive: false });
+  window.addEventListener('touchend', function (e) { onUp(); }, { passive: false });
+  window.addEventListener('mousedown', onDown);
+  window.addEventListener('mousemove', onMove);
+  window.addEventListener('mouseup', onUp);
+
+  function ballScreenPos(b) {
+    const dirX = Math.cos(angle), dirY = Math.sin(angle);
+    const nx = Math.sin(angle), ny = -Math.cos(angle);
+    return {
+      x: pivotX + b.s * dirX + BALL_RADIUS * nx,
+      y: pivotY + b.s * dirY + BALL_RADIUS * ny
+    };
+  }
+
+  function update(dt) {
+    if (state !== 'playing') {
+      tiltCurrent += (0 - tiltCurrent) * Math.min(1, INPUT_SMOOTH * dt);
+      angle = -tiltCurrent * MAX_ANGLE;
+      return;
+    }
+
+    if (ending) {
+      for (const b of balls) {
+        if (b.phase === 'falling') {
+          b.fallVY += DROP_GRAVITY * dt;
+          b.fallX += b.fallVX * dt;
+          b.fallY += b.fallVY * dt;
+          b.fallT += dt;
+        }
+      }
+      const failing = balls.find(function (b) { return b.phase === 'falling'; });
+      if (failing && (failing.fallT > FALL_DURATION || failing.fallY > H + BALL_RADIUS * 3)) {
+        endGame();
+      }
+      return;
+    }
+
+    tiltCurrent += (tiltInput - tiltCurrent) * Math.min(1, INPUT_SMOOTH * dt);
+
+    let weightSum = 0, activeCount = 0;
+    for (const b of balls) {
+      if (b.phase === 'active') { weightSum += b.s / beamHalfLen; activeCount++; }
+    }
+    const weightBias = activeCount ? Math.max(-1, Math.min(1, weightSum / activeCount)) : 0;
+
+    angle = -tiltCurrent * MAX_ANGLE + weightBias * MAX_ANGLE * WEIGHT_TILT;
+    angle = Math.max(-MAX_ANGLE, Math.min(MAX_ANGLE, angle));
+
+    const limit = beamHalfLen - BALL_RADIUS * 0.4;
+    let maxProximity = 0;
+
+    for (const b of balls) {
+      if (b.phase === 'dropping') {
+        b.dropVY += DROP_GRAVITY * dt;
+        b.dropY += b.dropVY * dt;
+        if (b.dropY >= b.dropTargetY) {
+          b.dropY = b.dropTargetY;
+          b.phase = 'active';
+          playThud();
+        }
+        continue;
+      }
+      if (b.phase !== 'active') continue;
+
+      const a = GRAVITY * Math.sin(angle);
+      b.v += a * dt;
+      b.v *= (1 - DAMPING * dt);
+      b.s += b.v * dt;
+      maxProximity = Math.max(maxProximity, Math.abs(b.s) / beamHalfLen);
+
+      if (b.s > limit || b.s < -limit) {
+        b.s = Math.max(-beamHalfLen, Math.min(beamHalfLen, b.s));
+        const pos = ballScreenPos(b);
+        const sign = Math.sign(b.s) || 1;
+        b.phase = 'falling';
+        b.fallX = pos.x;
+        b.fallY = pos.y;
+        b.fallVX = sign * (170 + Math.abs(b.v) * 0.25);
+        b.fallVY = b.v * Math.sin(angle) * 0.4;
+        b.fallT = 0;
+        ending = true;
+        playWhoosh();
+      }
+    }
+
+    if (audioCtx && maxProximity > 0.78 && (audioCtx.currentTime - lastDangerBeep) > 0.35) {
+      lastDangerBeep = audioCtx.currentTime;
+      playDanger();
+    }
+
+    elapsed += dt;
+
+    if (!secondMoonSpawned && elapsed >= SECOND_MOON_DELAY) {
+      secondMoonSpawned = true;
+      balls.push(makeDroppingBall(1));
+      playSpawn();
+    }
+  }
+
+  function mixColor(a, b, t) {
+    return [
+      Math.round(a[0] + (b[0] - a[0]) * t),
+      Math.round(a[1] + (b[1] - a[1]) * t),
+      Math.round(a[2] + (b[2] - a[2]) * t)
+    ];
+  }
+
+  function drawMoon(x, y, rot, theme) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.shadowColor = theme.glow;
+    ctx.shadowBlur = 22;
+    const ballGrad = ctx.createRadialGradient(
+      -BALL_RADIUS * 0.35, -BALL_RADIUS * 0.4, BALL_RADIUS * 0.15,
+      0, 0, BALL_RADIUS * 1.1
+    );
+    ballGrad.addColorStop(0, theme.hi);
+    ballGrad.addColorStop(0.5, theme.mid);
+    ballGrad.addColorStop(1, theme.dark);
+    ctx.fillStyle = ballGrad;
+    ctx.beginPath();
+    ctx.arc(0, 0, BALL_RADIUS, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.shadowBlur = 0;
+    ctx.rotate(rot);
+    ctx.globalAlpha = 0.28;
+    ctx.fillStyle = theme.crater;
+    ctx.beginPath(); ctx.arc(5, -3, 3.2, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(-6, 5, 2.1, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(1, 8, 1.6, 0, Math.PI * 2); ctx.fill();
+    ctx.globalAlpha = 1;
+    ctx.restore();
+  }
+
+  function draw() {
+    ctx.clearRect(0, 0, W, H);
+
+    const bg = ctx.createRadialGradient(pivotX, pivotY * 0.7, 0, pivotX, pivotY * 0.7, Math.max(W, H) * 0.8);
+    bg.addColorStop(0, '#0d1428');
+    bg.addColorStop(1, '#04060d');
+    ctx.fillStyle = bg;
+    ctx.fillRect(0, 0, W, H);
+
+    const t = performance.now() / 1000;
+    for (const st of stars) {
+      const tw = 0.55 + 0.45 * Math.sin(t * 1.3 + st.tw);
+      ctx.globalAlpha = st.a * tw;
+      ctx.fillStyle = '#bcd7ff';
+      ctx.beginPath();
+      ctx.arc(st.x, st.y, st.r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+
+    let maxProximity = 0;
+    for (const b of balls) {
+      if (b.phase === 'active') maxProximity = Math.max(maxProximity, Math.abs(b.s) / beamHalfLen);
+    }
+    const danger = Math.max(0, (maxProximity - 0.6) / 0.4);
+
+    let shakeX = 0, shakeY = 0;
+    if (shakeT > 0) {
+      shakeX = (Math.random() - 0.5) * 10 * shakeT;
+      shakeY = (Math.random() - 0.5) * 10 * shakeT;
+    }
+
+    ctx.save();
+    ctx.translate(pivotX + shakeX, pivotY + shakeY);
+    ctx.rotate(angle);
+
+    const beamColor = mixColor([94, 217, 255], [255, 92, 92], danger);
+    ctx.shadowColor = 'rgba(' + beamColor.join(',') + ',0.65)';
+    ctx.shadowBlur = 18;
+    ctx.strokeStyle = 'rgba(' + beamColor.join(',') + ',0.95)';
+    ctx.lineWidth = 4;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(-beamHalfLen, 0);
+    ctx.lineTo(beamHalfLen, 0);
+    ctx.stroke();
+
+    ctx.shadowBlur = 10;
+    ctx.fillStyle = 'rgba(' + beamColor.join(',') + ',0.9)';
+    [-beamHalfLen, beamHalfLen].forEach(function (ex) {
+      ctx.beginPath();
+      ctx.arc(ex, 0, 5, 0, Math.PI * 2);
+      ctx.fill();
+    });
+
+    ctx.restore();
+
+    ctx.save();
+    ctx.translate(pivotX, pivotY);
+    ctx.shadowColor = 'rgba(255,200,140,0.5)';
+    ctx.shadowBlur = 12;
+    ctx.fillStyle = '#ffc98c';
+    ctx.beginPath();
+    ctx.arc(0, 26, 3.5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.shadowBlur = 0;
+    ctx.strokeStyle = 'rgba(120,140,170,0.35)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(-14, 60);
+    ctx.lineTo(0, 26);
+    ctx.lineTo(14, 60);
+    ctx.stroke();
+    ctx.restore();
+
+    for (const b of balls) {
+      const theme = MOON_THEMES[b.theme % MOON_THEMES.length];
+      if (b.phase === 'dropping') {
+        drawMoon(pivotX + b.dropTargetS, b.dropY, 0, theme);
+      } else if (b.phase === 'active') {
+        const pos = ballScreenPos(b);
+        drawMoon(pos.x + shakeX, pos.y + shakeY, b.s / BALL_RADIUS, theme);
+      } else if (b.phase === 'falling') {
+        drawMoon(b.fallX, b.fallY, (b.s / BALL_RADIUS) + b.fallT * 6 * Math.sign(b.fallVX), theme);
+      }
+    }
+
+    if (shakeT > 0) shakeT = Math.max(0, shakeT - 0.02);
+  }
+
+  let last = performance.now();
+  function frame(now) {
+    const dt = Math.min(0.033, (now - last) / 1000);
+    last = now;
+    update(dt);
+    draw();
+    if (state === 'playing') {
+      timeVal.textContent = elapsed.toFixed(1) + 's';
+    } else if (state === 'paused') {
+      timeVal.textContent = pausedElapsed.toFixed(1) + 's';
+    }
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', function () {
+      navigator.serviceWorker.register('service-worker.js').catch(function () {});
+    });
+  }
+})();
+</script>
+</body>
+</html>
